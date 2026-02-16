@@ -15,6 +15,7 @@ We are given $N$ cities on a map with variable connectivity (controlled through 
   * $d_{uv}$: Geometric distance between cities $u$ and $v$.
   * $w$: Current weight (gold) carried.
   * $\alpha, \beta$: Parameters controlling the weight penalty.
+* **Output** The program returns the path in the form of a list of tuples (city, gold collected) showing all cities visited including intermediary nodes where gold is not collected $$[(c_{1},g_1), (c_2,g_2), ... (0,0)]$$
 
 Because $\beta$ is often $>1$, carrying a heavy load over long distances is expensive. The optimal strategy involves frequent returns to the base to drop off gold.
 
