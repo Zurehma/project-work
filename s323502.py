@@ -21,11 +21,15 @@ def solution(p: Problem):
     all_nodes = list(p.graph.nodes)
     city_nodes = [n for n in all_nodes if n != 0]
     gold_map = nx.get_node_attributes(p.graph, 'gold')
+
+    max_node_id = max(all_nodes)
     
     print("Pre-computing path costs...")
     
-    dist_matrix = {}      # Geometric distance
-    beta_dist_matrix = {} # Sum of (edge_dist ** beta)
+    #using arrays instead of dictionaries to reduce computation time in large cases e.g 1000 cities
+    dist_matrix = [[0.0] * (max_node_id + 1) for _ in range(max_node_id + 1)]       #2D array for geometric distance
+    beta_dist_matrix = [[0.0] * (max_node_id + 1) for _ in range(max_node_id + 1)]  #sum of (edge_dist ** beta)
+    parent_matrix = [[-1] * (max_node_id + 1) for _ in range(max_node_id + 1)]       #2D arrray storing parent node of each node for faster path reconstruction
     
     for src in all_nodes:
         # Run Dijkstra once per source to get the "Shortest Path Tree"
@@ -40,22 +44,31 @@ def solution(p: Problem):
         beta_vals = {src: 0.0}
         
         for city in ordered_nodes:
-            if city == src:
-                continue
-                
+            if city == src: continue
+            
             parent = preds[city][0]
+            dist_matrix[src][city] = dists[city]
+            parent_matrix[src][city] = parent  
             
+            # Beta Calculation
             edge_dist = dists[city] - dists[parent]
-            
-            # BetaCost(Source -> City) = BetaCost(Source -> Parent) + (Edge^Beta)
             beta_vals[city] = beta_vals[parent] + (edge_dist ** beta)
-            
-        dist_matrix[src] = dists
-        beta_dist_matrix[src] = beta_vals
+            beta_dist_matrix[src][city] = beta_vals[city]
+        
 
     print("Pre-computation complete.")
 
-    # Helper functions    
+    # Helper functions 
+    def get_path(u, v):
+        """Reconstructs path from u to v using parent matrix"""
+        path = []
+        curr = v
+        while curr != u:
+            path.append(curr)
+            curr = parent_matrix[u][curr]
+        path.append(u)
+        return path[::-1] #Reverse to get correct order
+       
     def calculate_segment_cost(source, target, current_weight):
         """
         Calculates cost for a trip from source to target.
@@ -73,7 +86,7 @@ def solution(p: Problem):
         
         return d_total + penalty
 
-    def evaluate(sequence):     #Evaluates total cost of a tour
+    def evaluate(sequence):     #Evaluates total cost of a route
         total_cost = 0.0
         current_node = 0
         current_weight = 0.0
@@ -85,9 +98,7 @@ def solution(p: Problem):
             cost_direct = calculate_segment_cost(current_node, next_node, current_weight)
             
             # Option B: Via Base
-            # 1. Return to base with current weight
             cost_return = calculate_segment_cost(current_node, 0, current_weight)
-            # 2. Leave base with 0 weight
             cost_outbound = calculate_segment_cost(0, next_node, 0)
             
             cost_via_base = cost_return + cost_outbound
@@ -109,7 +120,7 @@ def solution(p: Problem):
         formatted_path = []
         current_node = 0
         current_weight = 0.0
-        
+
         for next_node in sequence:
             gold_at_next = gold_map[next_node]
             
@@ -117,76 +128,120 @@ def solution(p: Problem):
             cost_via_base = calculate_segment_cost(current_node, 0, current_weight) + calculate_segment_cost(0, next_node, 0)
 
             if cost_direct <= cost_via_base:
-                current_weight = current_weight + gold_at_next
-                formatted_path.append((next_node, gold_at_next))
+                shortestPath = get_path(current_node, next_node)
+                for step in shortestPath[1:]:
+                    if step==next_node:
+                        current_weight = current_weight + gold_at_next
+                        formatted_path.append((next_node, gold_at_next))
+                    else:
+                        formatted_path.append((step, 0))                
                 current_node = next_node
+
             else:
-                formatted_path.append((0, 0))
-                current_weight = gold_at_next
-                formatted_path.append((next_node, gold_at_next))
-                current_node = next_node
+                pathToBase = get_path(current_node, 0)
+                for step in pathToBase[1:]:
+                    formatted_path.append((step, 0))
                 
-        formatted_path.append((0, 0))
+                pathToNext = get_path(0, next_node)
+                current_weight = 0
+                
+                for step in pathToNext[1:]:
+                    if step==next_node:
+                        current_weight = current_weight + gold_at_next
+                        formatted_path.append((next_node, gold_at_next))
+                    else:
+                        formatted_path.append((step, 0))
+                
+                current_node = next_node
+            
+        #Final return to base
+        pathToBase = get_path(current_node, 0)
+        for step in pathToBase[1:]:
+            formatted_path.append((step, 0))
+                
         return formatted_path
+    
+    def is_valid(problem, path):
+        if not path: return False
+
+        print(f"Validating path...")
+    
+        valid_edges = set()     #using set decreases total computation time for 1000 cities (density 1) case from 45+ minutes to 15 minutes
+                                #using nx.has_edge for each edge in path is too slow
+        for u, v in problem.graph.edges:
+            valid_edges.add((u, v))
+            valid_edges.add((v, u)) 
+            
+        if (0, path[0][0]) not in valid_edges and (path[0][0], 0) not in valid_edges:
+            return False
+
+        for i in range(len(path) - 1):
+            u = path[i][0]
+            v = path[i+1][0]
+            if (u, v) not in valid_edges:
+                return False
+                
+        return True
 
     
     # GA loop
+    # Initialize population as (cost, individual)
     population = []
+    
     for _ in range(POPULATION_SIZE):
         ind = list(city_nodes)
         random.shuffle(ind)
-        population.append(ind)
+        cost = evaluate(ind)
+        population.append((cost, ind))
         
-    best_solution = None
     best_cost = float('inf')
+    best_solution = None
 
     print(f"Running Genetic Algorithm ({GENERATIONS} generations)...")
     
     for gen in range(GENERATIONS):
-        # Evaluate Fitness
-        scored_population = []
-        for ind in population:
-            cost = evaluate(ind)
-            scored_population.append((cost, ind))
-            if cost < best_cost:
-                best_cost = cost
-                best_solution = list(ind) # Make a copy
+        # Sort by cost (ascending)
+        population.sort(key=lambda x: x[0])
         
-        # Sort by cost
-        scored_population.sort(key=lambda x: x[0])
-        
-        # Selection (Elitism)
-        # Keep the best individuals unchanged
-        new_population = [x[1] for x in scored_population[:ELITISM_COUNT]]
+        current_best_cost, current_best_ind = population[0]
+        if current_best_cost < best_cost:
+            best_cost = current_best_cost
+            best_solution = list(current_best_ind)
+            
+        # Elitism: Keep top 2 
+        new_population = population[:ELITISM_COUNT]
         
         # Breeding
         while len(new_population) < POPULATION_SIZE:
             # Tournament Selection
-            # Pick random candidates and take the best
-            candidates_a = random.sample(scored_population, TOURNAMENT_SIZE)
+            candidates_a = random.sample(population, TOURNAMENT_SIZE)
             parent_a = min(candidates_a, key=lambda x: x[0])[1]
             
-            candidates_b = random.sample(scored_population, TOURNAMENT_SIZE)
+            candidates_b = random.sample(population, TOURNAMENT_SIZE)
             parent_b = min(candidates_b, key=lambda x: x[0])[1]
             
-            # Ordered Crossover (preserves the relative order of cities)
-            start, end = sorted(random.sample(range(len(parent_a)), 2))
-            child = [-1] * len(parent_a)
+            #Ordered crossover
+            size = len(parent_a)
+            start, end = sorted(random.sample(range(size), 2))
+            child = [-1] * size
             child[start:end] = parent_a[start:end]
+            
+            genes_in_child = set(child[start:end])
             
             pointer = 0
             for gene in parent_b:
-                if gene not in child:
+                if gene not in genes_in_child:
                     while child[pointer] != -1:
                         pointer += 1
                     child[pointer] = gene
             
-            # Mutation (Swap)
+            # Swap Mutation
             if random.random() < MUTATION_RATE:
-                idx1, idx2 = random.sample(range(len(child)), 2)
+                idx1, idx2 = random.sample(range(size), 2)
                 child[idx1], child[idx2] = child[idx2], child[idx1]
-                
-            new_population.append(child)
+            
+            child_cost = evaluate(child)
+            new_population.append((child_cost, child))
             
         population = new_population
         
@@ -213,11 +268,10 @@ def solution(p: Problem):
 
     # Convert the best sequence into the required path format
     final_path = reconstruct_path_format(best_solution)
-    
+
+    if is_valid(p, final_path):
+        print("Path is valid")
+    else:
+        print("Path is invalid") 
+
     return final_path
-
-
-if __name__ == "__main__":
-    print("===Test Case: 1000 cities, density 0.2, alpha 1, beta 1===")
-    case=Problem(1000, density=0.2, alpha=1, beta=1)    
-    best_path = solution(case)    
